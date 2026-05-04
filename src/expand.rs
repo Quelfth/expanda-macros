@@ -425,6 +425,9 @@ fn eval_interpolation(cx: &ExpandContext<'_>, tt: &Tt) -> Result<Metaval, TokenS
         Tt::Group(group) if group.delimiter() == Delimiter::Brace => {
             eval_expression(cx, group)
         },
+        Tt::Punct(p) if p.as_char() == cx.sigil => {
+            Ok(Metaval::Single(tt.clone()))
+        },
         _ => err!(tt, "`$` requires an identifier or `{ }`")
     }
 }

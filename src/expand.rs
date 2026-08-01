@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ffi::{CString}};
+use std::{collections::HashMap, ffi::CString, num::ParseIntError};
 
 use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree as Tt};
 use quote::{quote_spanned};
@@ -59,7 +59,7 @@ impl Metaval {
                     let val = Metaval::parse(token)?;
                     list.push(val);
                 }
-                return Ok(list);
+                Ok(list)
             },
             _ => err!(tt, "metalist requires `( )`"),
         }
@@ -88,12 +88,12 @@ impl Metaval {
 
                                 Ok(Self::Single(Tt::Ident(make_ident(cat, lhs.span()))))
                             },
-                            _ => return Err(ConcatenateError::RhsBadLiteralForIdent),
+                            _ => Err(ConcatenateError::RhsBadLiteralForIdent),
                         }
                     }
                     (Tt::Literal(lhs), Tt::Literal(rhs)) => {
                         let lkind = LitKind::of(&lhs);
-                        let rkind = LitKind::of(&rhs);
+                        let rkind = LitKind::of(rhs);
                         if let Some(ltype) = lkind.string_type() && let Some(rtype) = rkind.string_type() && ltype == rtype {
                             let l = lhs.to_string();
                             let r = rhs.to_string();
@@ -200,7 +200,7 @@ impl<'a> ExpandContext<'a> {
     }
 
     pub fn value_spanned(&self, name: &str, span: Span) -> Result<&Metaval, TokenStream> {
-        if let Some(val) = self.metavars.get(&name.to_string()) {
+        if let Some(val) = self.metavars.get(name) {
             Ok(val)
         } else if let Some(parent) = self.parent {
             parent.value_spanned(name, span)
@@ -245,6 +245,9 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
         ForList { var: String, list: Vec<Metaval> },
         ForInterpolation { var: String, list: Vec<Metaval> },
         ForListInterpolation { var: String, list: Vec<Metaval> },
+        Repeat,
+        RepeatInterpolation,
+        RepeatBody { count: u64 },
         Interpolation,
     }
     let mut state = State::Code;
@@ -271,6 +274,8 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                     _ => code.push(expand_if_group(&cx, tt)?),
                 }
             },
+            // <
+            // <-
             State::Arrowhead | State::Arrow => {
                 match tt {
                     Tt::Punct(ref punct) => {
@@ -289,6 +294,7 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                     },
                 }
             },
+            // <--
             State::StartDirective => {
                 match tt {
                     Tt::Ident(ident) => {
@@ -296,12 +302,14 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                             "use" => State::UseChar,
                             "let" => State::LetDollar,
                             "for" => State::ForDollar,
+                            "repeat" => State::Repeat,
                             _ => return err!(ident, "invalid directive"),
                         };
                     },
                     _ => return err!(tt, "directive begins with a non-identifier"),
                 }
             },
+            // <--use
             State::UseChar => {
                 match tt {
                     Tt::Punct(p) => {
@@ -311,10 +319,12 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                 }
                 state = State::Code;
             },
+            // <--let
             State::LetDollar => {
                 assert_punct!(tt, cx.sigil, "let directive name requires `$`");
                 state = State::LetName { is_list: false };
             },
+            // <--let $
             State::LetName { is_list } => {
                 if !is_list && let Tt::Punct(ref p) = tt && p.as_char() == '*' {
                     state = State::LetName { is_list: true }
@@ -323,10 +333,12 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                     state = State::LetEqual { is_list, name: name.to_string() };
                 }
             }
+            // <--let $foo
             State::LetEqual { is_list, name } => {
                 assert_punct!(tt, '=', "let directive requires `=` here");
                 state = State::LetValue { is_list, name };
             }
+            // <--let $foo =
             State::LetValue { is_list, name } => {
                 if matches!(tt, Tt::Punct(ref punct) if punct.as_char() == cx.sigil) {
                     state = State::LetInterpolation { is_list, name };
@@ -342,6 +354,7 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                     }
                 }
             }
+            // <--let $foo = $
             State::LetInterpolation { is_list, name } => {
                 if is_list && let Tt::Punct(ref p) = tt && p.as_char() == '*' {
                     let list = eval_list_interpolation(&cx, &tt)?;
@@ -357,20 +370,24 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                     state = State::Code;
                 }
             }
+            // <--for
             State::ForDollar => {
                 assert_punct!(tt, cx.sigil, "for directive name requires `$`");
                 state = State::ForName;
             }
+            // <--for $
             State::ForName => {
                 let Tt::Ident(ref name) = tt else {return err!(tt, "for directive name must be an identifier")};
                 state = State::ForIn { name: name.to_string() };
             }
+            // <--for $foo
             State::ForIn { name } => {
                 if !matches!(tt, Tt::Ident(ref ident) if ident.to_string() == "in") {
                     return err!(tt, "for directive requires `in` here");
                 }
                 state = State::ForList { var: name, list: Vec::new() };
             }
+            // <--for $foo in
             State::ForList { var, mut list } => {
                 match tt {
                     Tt::Group(ref g) if g.delimiter() == Delimiter::Brace => {
@@ -390,6 +407,7 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                     }
                 }
             }
+            // <--for $foo in $
             State::ForInterpolation { var, mut list } => {
                 if let Tt::Punct(ref p) = tt && p.as_char() == '*' {
                     state = State::ForListInterpolation { var, list };
@@ -398,10 +416,40 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                     state = State::ForList { var, list };
                 }
             }
+            // <--for $foo in $*
             State::ForListInterpolation { var, mut list } => {
                 list.extend(eval_list_interpolation(&cx, &tt)?);
                 state = State::ForList { var, list };
             }
+            // <--repeat
+            State::Repeat => {
+                if let Tt::Punct(ref p) = tt && p.as_char() == cx.sigil {
+                    state = State::RepeatInterpolation;
+                } else {
+                    let Tt::Literal(ref lit) = tt else {return err!(tt, "repeat directive requires an integer literal count")};
+                    let Some(count) = parse_intlit(&lit.to_string()).ok() else {return err!(tt, "repeat directive requires an integer count")};
+                    state = State::RepeatBody { count };
+                }
+            }
+            // <--repeat $
+            State::RepeatInterpolation => {
+                let val = eval_interpolation(&cx, &tt)?;
+                let Metaval::Single(Tt::Literal(ref lit)) = val else {return err!(tt, "repeat directive count must evaluate to a single integer literal")};
+                let Some(count) = parse_intlit(&lit.to_string()).ok() else {return err!(tt, "repeat directive count must evaluate to a single integer literal")};
+                state = State::RepeatBody { count };
+            }
+            // <--repeat N
+            State::RepeatBody { count } => {
+                if let Tt::Group(ref g) = tt && g.delimiter() == Delimiter::Brace {
+                    for _ in 0..count {
+                        code.extend(expand(cx.child(), g.stream())?);
+                    }
+                    state = State::Code;
+                } else {
+                    return err!(tt, "repeat directive requires `{ }`");
+                }
+            }
+            // $
             State::Interpolation => {
                 let val = eval_interpolation(&cx, &tt)?;
                 match val.clone() {
@@ -622,4 +670,16 @@ fn unescape(str: &str) -> String {
         })
     }
     result
+}
+
+fn parse_intlit(lit: &str) -> Result<u64, ParseIntError> {
+    u64::from_str_radix(
+        lit, 
+        match lit.get(0..2) {
+            Some("0x") => 16,
+            Some("0b") => 2,
+            Some("0o") => 8,
+            _ => 10,
+        },
+    )
 }

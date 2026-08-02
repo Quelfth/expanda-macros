@@ -1,9 +1,12 @@
-use std::{collections::HashMap, ffi::CString, num::ParseIntError};
+use std::collections::HashMap;
 
-use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree as Tt};
-use quote::{quote_spanned};
+use proc_macro::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree as Tt};
 
-use crate::error::{error, err};
+use crate::{error::error, expand::metaval::ConcatenateError, literal::{LitKind, parse_int, parse_string}};
+
+use metaval::Metaval;
+
+mod metaval;
 
 pub struct ExpandContext<'a> {
     parent: Option<&'a Self>,
@@ -23,150 +26,6 @@ impl<'a> Default for ExpandContext<'a> {
     }
 }
 
-#[derive(Clone)]
-pub enum Metaval {
-    Single(Tt),
-    Multi(TokenStream),
-}
-
-impl Metaval {
-    pub fn parse(tt: Tt) -> Result<Self, TokenStream> {
-        match tt {
-            Tt::Group(group) => {
-                match group.delimiter() {
-                    Delimiter::Bracket | Delimiter::None => {
-                        let stream = group.stream();
-                        let mut clone = stream.clone().into_iter();
-                        if let Some(token) = clone.next() && clone.next().is_none() {
-                            return Ok(token.into());
-                        }
-                        Ok(stream.into())
-                    }
-                    _ => err!(group, "invalid metavalue delimiter"),
-                }
-            },
-            _ => Ok(tt.into())
-        }
-    }
-
-    pub fn parse_list(tt: Tt) -> Result<Vec<Self>, TokenStream> {
-        match tt {
-            Tt::Group(group) if group.delimiter() == Delimiter::Parenthesis => {
-                let stream = group.stream();
-                let mut list = Vec::new();
-
-                for token in stream {
-                    let val = Metaval::parse(token)?;
-                    list.push(val);
-                }
-                Ok(list)
-            },
-            _ => err!(tt, "metalist requires `( )`"),
-        }
-    }
-
-    pub fn concatenate(self, rhs: &Self) -> Result<Self, ConcatenateError> {
-        fn unraw(maybe_raw: &str) -> &str {
-            maybe_raw.strip_prefix("r#").unwrap_or(maybe_raw)
-        }
-        match (self, rhs) {
-            (Metaval::Single(lhs), Metaval::Single(rhs)) => {
-                match (lhs, rhs) {
-                    (Tt::Ident(lhs), Tt::Ident(rhs)) => {
-                        let cat = &(unraw(&lhs.to_string()).to_owned() + unraw(&rhs.to_string()));
-
-                        Ok(Self::Single(Tt::Ident(make_ident(cat, lhs.span()))))
-                    }
-                    (Tt::Ident(lhs), Tt::Literal(rhs)) => {
-                        match LitKind::of(rhs) {
-                            LitKind::Number => {
-                                let r = rhs.to_string();
-                                if r.chars().any(|c| !(c.is_alphanumeric() || c == '_')) {
-                                    return Err(ConcatenateError::RhsBadNumberForIdent);
-                                }
-                                let cat = &(unraw(&lhs.to_string()).to_owned() + &r);
-
-                                Ok(Self::Single(Tt::Ident(make_ident(cat, lhs.span()))))
-                            },
-                            _ => Err(ConcatenateError::RhsBadLiteralForIdent),
-                        }
-                    }
-                    (Tt::Literal(lhs), Tt::Literal(rhs)) => {
-                        let lkind = LitKind::of(&lhs);
-                        let rkind = LitKind::of(rhs);
-                        if let Some(ltype) = lkind.string_type() && let Some(rtype) = rkind.string_type() && ltype == rtype {
-                            let l = lhs.to_string();
-                            let r = rhs.to_string();
-                            let (l, l_suffix) = parse_strlit(&l);
-                            let (r, r_suffix) = parse_strlit(&r);
-                            let l = if lkind.is_raw() {l.to_owned()} else {unescape(l)};
-                            let r = if rkind.is_raw() {r.to_owned()} else {unescape(r)};
-                            if !l_suffix.is_empty() {return Err(ConcatenateError::LhsSuffix)}
-                            let mut result = ltype.make_literal(&(l.to_owned() + &r));
-                            result.set_span(lhs.span());
-                            if !r_suffix.is_empty() {
-                                result = (result.to_string() + r_suffix).parse().unwrap();
-                            }
-                            Ok(Self::Single(Tt::Literal(result)))
-                        } else {
-                            Err(ConcatenateError::BadUnknown)
-                        }
-                    }
-                    _ => Err(ConcatenateError::BadUnknown)
-                }
-            },
-            (Metaval::Single(_), Metaval::Multi(_)) => Err(ConcatenateError::RhsMulti),
-            _ => Err(ConcatenateError::LhsMulti),
-        }
-    }
-
-    pub fn stringify(&self, r#type: StringType) -> Self {
-        let string = match self {
-            Metaval::Single(token_tree) => token_tree.to_string(),
-            Metaval::Multi(token_stream) => token_stream.to_string(),
-        };
-        let lit = r#type.make_literal(&string);
-        Self::Single(Tt::Literal(lit))
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub enum StringType {
-    String,
-    ByteString,
-    CString,
-}
-
-impl StringType {
-    pub fn make_literal(self, string: &str) -> Literal {
-        match self {
-            StringType::String => Literal::string(string),
-            StringType::ByteString => Literal::byte_string(string.as_bytes()),
-            StringType::CString => Literal::c_string(&CString::new(string).unwrap()),
-        }
-    }
-}
-
-pub enum ConcatenateError {
-    LhsMulti,
-    RhsMulti,
-    RhsBadLiteralForIdent,
-    RhsBadNumberForIdent,
-    LhsSuffix,
-    BadUnknown,
-}
-
-impl From<Tt> for Metaval {
-    fn from(value: Tt) -> Self {
-        Self::Single(value)
-    }
-}
-
-impl From<TokenStream> for Metaval {
-    fn from(value: TokenStream) -> Self {
-        Self::Multi(value)
-    }
-}
 
 impl ExpandContext<'static> {
     pub fn new() -> Self {
@@ -195,7 +54,7 @@ impl<'a> ExpandContext<'a> {
         } else if let Some(parent) = self.parent {
             parent.value(name)
         } else {
-            err!(name, "unknown metavariable")
+            Err(error(name, "unknown metavariable"))
         }
     }
 
@@ -205,9 +64,7 @@ impl<'a> ExpandContext<'a> {
         } else if let Some(parent) = self.parent {
             parent.value_spanned(name, span)
         } else {
-            Err(quote_spanned!{
-                span.into() => compile_error!("unknown metavariable")
-            }.into())
+            Err(error(&span, "unknown metavariable"))
         }
     }
 
@@ -221,7 +78,7 @@ impl<'a> ExpandContext<'a> {
         } else if let Some(parent) = self.parent {
             parent.list(name)
         } else {
-            err!(name, "unknown metalist")
+            Err(error(name, "unknown metalist"))
         }
     }
 }
@@ -303,10 +160,10 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                             "let" => State::LetDollar,
                             "for" => State::ForDollar,
                             "repeat" => State::Repeat,
-                            _ => return err!(ident, "invalid directive"),
+                            _ => return Err(error(&ident, "invalid directive")),
                         };
                     },
-                    _ => return err!(tt, "directive begins with a non-identifier"),
+                    _ => return Err(error(&tt, "directive begins with a non-identifier")),
                 }
             },
             // <--use
@@ -315,13 +172,13 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                     Tt::Punct(p) => {
                         cx.sigil = p.as_char();
                     }
-                    _ => return err!(tt, "only punctuation can be used as interpolation sigil"),
+                    _ => return Err(error(&tt, "only punctuation can be used as interpolation sigil")),
                 }
                 state = State::Code;
             },
             // <--let
             State::LetDollar => {
-                assert_punct!(tt, cx.sigil, "let directive name requires `$`");
+                check_punct(tt, cx.sigil, &format!("let directive name requires `{}`", cx.sigil))?;
                 state = State::LetName { is_list: false };
             },
             // <--let $
@@ -329,13 +186,13 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                 if !is_list && let Tt::Punct(ref p) = tt && p.as_char() == '*' {
                     state = State::LetName { is_list: true }
                 } else {
-                    let Tt::Ident(ref name) = tt else {return err!(tt, "let directive name must be an identifier")};
+                    let Tt::Ident(ref name) = tt else {return Err(error(&tt, "let directive name must be an identifier"))};
                     state = State::LetEqual { is_list, name: name.to_string() };
                 }
             }
             // <--let $foo
             State::LetEqual { is_list, name } => {
-                assert_punct!(tt, '=', "let directive requires `=` here");
+                check_punct(tt, '=', "let directive requires `=` here")?;
                 state = State::LetValue { is_list, name };
             }
             // <--let $foo =
@@ -372,18 +229,18 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
             }
             // <--for
             State::ForDollar => {
-                assert_punct!(tt, cx.sigil, "for directive name requires `$`");
+                check_punct(tt, cx.sigil, &format!("for directive name requires `{}`", cx.sigil))?;
                 state = State::ForName;
             }
             // <--for $
             State::ForName => {
-                let Tt::Ident(ref name) = tt else {return err!(tt, "for directive name must be an identifier")};
+                let Tt::Ident(ref name) = tt else {return Err(error(&tt, "for directive name must be an identifier"))};
                 state = State::ForIn { name: name.to_string() };
             }
             // <--for $foo
             State::ForIn { name } => {
                 if !matches!(tt, Tt::Ident(ref ident) if ident.to_string() == "in") {
-                    return err!(tt, "for directive requires `in` here");
+                    return Err(error(&tt, "for directive requires `in` here"));
                 }
                 state = State::ForList { var: name, list: Vec::new() };
             }
@@ -426,16 +283,16 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                 if let Tt::Punct(ref p) = tt && p.as_char() == cx.sigil {
                     state = State::RepeatInterpolation;
                 } else {
-                    let Tt::Literal(ref lit) = tt else {return err!(tt, "repeat directive requires an integer literal count")};
-                    let Some(count) = parse_intlit(&lit.to_string()).ok() else {return err!(tt, "repeat directive requires an integer count")};
+                    let Tt::Literal(ref lit) = tt else {return Err(error(&tt, "repeat directive requires an integer literal count"))};
+                    let Some(count) = parse_int(&lit.to_string()).ok() else {return Err(error(&tt, "repeat directive requires an integer count"))};
                     state = State::RepeatBody { count };
                 }
             }
             // <--repeat $
             State::RepeatInterpolation => {
                 let val = eval_interpolation(&cx, &tt)?;
-                let Metaval::Single(Tt::Literal(ref lit)) = val else {return err!(tt, "repeat directive count must evaluate to a single integer literal")};
-                let Some(count) = parse_intlit(&lit.to_string()).ok() else {return err!(tt, "repeat directive count must evaluate to a single integer literal")};
+                let Metaval::Single(Tt::Literal(ref lit)) = val else {return Err(error(&tt, "repeat directive count must evaluate to a single integer literal"))};
+                let Some(count) = parse_int(&lit.to_string()).ok() else {return Err(error(&tt, "repeat directive count must evaluate to a single integer literal"))};
                 state = State::RepeatBody { count };
             }
             // <--repeat N
@@ -446,7 +303,7 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                     }
                     state = State::Code;
                 } else {
-                    return err!(tt, "repeat directive requires `{ }`");
+                    return Err(error(&tt, "repeat directive requires `{ }`"));
                 }
             }
             // $
@@ -476,7 +333,7 @@ fn eval_interpolation(cx: &ExpandContext<'_>, tt: &Tt) -> Result<Metaval, TokenS
         Tt::Punct(p) if p.as_char() == cx.sigil => {
             Ok(Metaval::Single(tt.clone()))
         },
-        _ => err!(tt, "`$` requires an identifier or `{ }`")
+        _ => Err(error(tt, &format!("`{}` requires an identifier or `{{ }}`", cx.sigil)))
     }
 }
 
@@ -486,7 +343,7 @@ fn eval_list_interpolation(cx: &ExpandContext<'_>, tt: &Tt) -> Result<Vec<Metava
             let val = cx.list(ident)?;
             Ok(val.clone())
         },
-        _ => err!(tt, "list interpolation requires an identifier")
+        _ => Err(error(tt, "list interpolation requires an identifier"))
     }
 }
 
@@ -515,7 +372,7 @@ fn eval_expression(xcx: &ExpandContext<'_>, group: &Group) -> Result<Metaval, To
                 let kind = LitKind::of(l);
                 if let Some(string_type) = kind.string_type() {
                     let s = l.to_string();
-                    let (content, "") = parse_strlit(&s) else { return err!(tt, "literal suffix is not allowed here") };
+                    let (content, "") = parse_string(&s) else { return Err(error(&tt, "literal suffix is not allowed here")) };
                     let val = xcx.value_spanned(content, tt.span())?;
                     let val = val.stringify(string_type);
 
@@ -525,35 +382,36 @@ fn eval_expression(xcx: &ExpandContext<'_>, group: &Group) -> Result<Metaval, To
                         result = Some((tt, val.clone()));
                     }
                 } else {
-                    return err!(tt, "unsupported expression literal token");
+                    return Err(error(&tt, "unsupported expression literal token"));
                 }
             }
-            _ => return err!(tt, "unsupported expression token"),
+            _ => return Err(error(&tt, "unsupported expression token")),
         }
     }
 
-    let Some((_, result)) = result else {return err!(group, "empty interpolation expressions are not allowed")};
+    let Some((_, result)) = result else {return Err(error(group, "empty interpolation expressions are not allowed"))};
 
     Ok(result)
 }
 
 fn map_cat_err(e: ConcatenateError, next_tt: Tt, prev_tt: &Tt) -> TokenStream {
     match e {
-        ConcatenateError::RhsMulti => error!(next_tt, "only individual tokens can be concatenated"),
-        ConcatenateError::LhsMulti => error!(prev_tt, "only individual tokens can be concatenated"),
-        ConcatenateError::RhsBadLiteralForIdent => error!(next_tt, "invalid literal to concatenate with identifier"),
-        ConcatenateError::RhsBadNumberForIdent => error!(next_tt, "cannot concatenate non-identifier characters with identifier"),
-        ConcatenateError::LhsSuffix => error!(prev_tt, "this literal's suffix prevents this concatenation"),
-        ConcatenateError::BadUnknown => error!(next_tt, "invalid concatenation"),
+        ConcatenateError::RhsMulti => error(&next_tt, "only individual tokens can be concatenated"),
+        ConcatenateError::LhsMulti => error(prev_tt, "only individual tokens can be concatenated"),
+        ConcatenateError::RhsBadLiteralForIdent => error(&next_tt, "invalid literal to concatenate with identifier"),
+        ConcatenateError::RhsBadNumberForIdent => error(&next_tt, "cannot concatenate non-identifier characters with identifier"),
+        ConcatenateError::LhsSuffix => error(prev_tt, "this literal's suffix prevents this concatenation"),
+        ConcatenateError::BadUnknown => error(&next_tt, "invalid concatenation"),
     }
 }
 
-macro_rules! assert_punct {
-    ($token:ident, $punct:expr, $error:literal) => {
-        if !matches!($token, Tt::Punct(ref punct) if punct.as_char() == $punct) {return err!($token, $error)}
+
+pub fn check_punct(token: Tt, punct: char, msg: &str) -> Result<Tt, TokenStream> {
+    if !matches!(token, Tt::Punct(ref p) if p.as_char() == punct) {
+        return Err(error(&token, msg));
     }
+    Ok(token)
 }
-use assert_punct;
 
 fn expand_if_group(cx: &ExpandContext<'_>, tt: Tt) -> Result<Tt, TokenStream> {
     let Tt::Group(group) = tt else {return Ok(tt)};
@@ -562,124 +420,4 @@ fn expand_if_group(cx: &ExpandContext<'_>, tt: Tt) -> Result<Tt, TokenStream> {
         group.delimiter(),
         expand(cx.child(), group.stream())?,
     )))
-}
-
-fn make_ident(string: &str, span: Span) -> Ident {
-    match string {
-        "as" | "async" | "await" | "break" | "const" | "continue" |
-        "dyn" | "else" | "enum" | "extern" | "false" | "fn" | "for" |
-        "if" | "impl" | "in" | "let" | "loop" | "match" | "mod" | "move" |
-        "mut" | "pub" | "ref" | "return" | "static" | "struct" | "trait" |
-        "true" | "type" | "unsafe" | "use" | "where" | "while" => Ident::new_raw(string, span),
-        _ => Ident::new(string, span),
-    }
-}
-
-
-#[allow(unused)]
-#[derive(Copy, Clone)]
-enum LitKind {
-    Char,
-    String,
-    RawString(u8),
-    ByteChar,
-    ByteString,
-    RawByteString(u8),
-    CString,
-    RawCString(u8),
-    Number,
-    Unknown,
-}
-
-impl LitKind {
-    pub fn of(lit: &Literal) -> Self {
-        let s = lit.to_string();
-        let mut s = s.chars();
-        let Some(c) = s.next() else { return Self::Unknown };
-        match c {
-            '\'' => Self::Char,
-            '"' => Self::String,
-            'r' => Self::RawString(s.take_while(|&c| c == '#').count() as _),
-            'b' => {
-                let Some(c) = s.next() else { return Self::Unknown };
-                match c {
-                    '\'' => Self::ByteChar,
-                    '"' => Self::ByteString,
-                    'r' => Self::RawByteString(s.take_while(|&c| c == '#').count() as _),
-                    _ => Self::Unknown,
-                }
-            },
-            'c' => {
-                let Some(c) = s.next() else { return Self::Unknown };
-                match c {
-                    '"' => Self::CString,
-                    'r' => Self::RawCString(s.take_while(|&c| c == '#').count() as _),
-                    _ => Self::Unknown,
-                }
-            }
-            '0'..='9' => Self::Number,
-            _ => Self::Unknown,
-        }
-    }
-
-    pub fn string_type(self) -> Option<StringType> {
-        Some(match self {
-            LitKind::String | LitKind::RawString(_) => StringType::String,
-            LitKind::ByteString | LitKind::RawByteString(_) => StringType::ByteString,
-            LitKind::CString | LitKind::RawCString(_) => StringType::CString,
-            _ => return None
-        })
-    }
-
-    pub fn is_raw(self) -> bool {
-        matches!(self, LitKind::RawString(_) | LitKind::RawCString(_) | LitKind::RawByteString(_))
-    }
-}
-
-fn parse_strlit(lit: &str) -> (&str, &str) {
-    let i = lit.bytes().enumerate().find(|&(_, c)| c == b'"').unwrap().0;
-    let j = lit.bytes().enumerate().rev().find(|&(_, c)| c == b'"').unwrap().0;
-    let k = lit.bytes().enumerate().rev().find(|&(_, c)| matches!(c, b'"' | b'#')).unwrap().0;
-    (&lit[i + 1..j], &lit[k + 1..])
-}
-
-fn unescape(str: &str) -> String {
-    let mut chars = str.chars();
-    let mut result = String::new();
-    while let Some(char) = chars.next() {
-        if char != '\\' {
-            result.push(char);
-            continue;
-        }
-        result.push(match chars.next().unwrap() {
-            '\\' => '\\',
-            '\'' => '\'',
-            '"' => '"',
-            '0' => '\0',
-            'n' => '\n',
-            'r' => '\r',
-            't' => '\t',
-            'x' => {
-                u8::from_str_radix(&chars.by_ref().take(2).collect::<String>(), 0x10).unwrap().into()
-            }
-            'u' => {
-                chars.next();
-                u32::from_str_radix(&chars.by_ref().take_while(|&c| c != '}').collect::<String>(), 0x10).unwrap().try_into().unwrap()
-            }
-            _ => panic!(),
-        })
-    }
-    result
-}
-
-fn parse_intlit(lit: &str) -> Result<u64, ParseIntError> {
-    u64::from_str_radix(
-        lit, 
-        match lit.get(0..2) {
-            Some("0x") => 16,
-            Some("0b") => 2,
-            Some("0o") => 8,
-            _ => 10,
-        },
-    )
 }

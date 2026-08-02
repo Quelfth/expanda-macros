@@ -5,6 +5,7 @@ use proc_macro::TokenStream;
 use crate::expand::ExpandContext;
 
 mod expand;
+mod literal;
 mod import;
 mod error;
 

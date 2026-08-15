@@ -40,13 +40,7 @@ pub fn using(args: TokenStream, item: TokenStream) -> Result<TokenStream, TokenS
     }
     let contents = g.stream();
 
-    let mut args = args.into_iter().collect::<VecDeque<_>>();
-    let is_list = if let TokenTree::Punct(ref p) = args[0] && p.as_char() == '*' {
-        args.pop_front();
-        true
-    } else {
-        false
-    };
+    let args = args.into_iter().collect::<VecDeque<_>>();
     let name = args.back().unwrap().clone();
     let args = args.into_iter().collect::<TokenStream>();
     
@@ -58,7 +52,7 @@ pub fn using(args: TokenStream, item: TokenStream) -> Result<TokenStream, TokenS
     stream.extend([
         punct('!'),
         group(Delimiter::Brace, [
-            fold_into(if is_list {Delimiter::Parenthesis} else {Delimiter::Bracket}),
+            fold_into(Delimiter::Parenthesis),
             fold_right({
                 let mut stream = TokenStream::new();
                 stream.extend(long_left_arrow());
@@ -66,9 +60,6 @@ pub fn using(args: TokenStream, item: TokenStream) -> Result<TokenStream, TokenS
                     TokenTree::Ident(Ident::new("let", Span::call_site())),
                     punct('$')
                 ]);
-                if is_list {
-                    stream.extend([punct('*')]);
-                }
                 stream.extend([
                     name,
                     punct('='),

@@ -23,6 +23,10 @@ impl ErrorSpan for Ident {
     fn span(&self) -> Span { self.span() }
 }
 
+impl ErrorSpan for Literal {
+    fn span(&self) -> Span { self.span() }
+}
+
 pub fn error(span: &impl ErrorSpan, msg: &str) -> TokenStream {
     let span = span.span();
     

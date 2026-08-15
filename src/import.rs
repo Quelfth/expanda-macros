@@ -3,10 +3,17 @@ use std::collections::VecDeque;
 use proc_macro::Span;
 
 use proc_macro::{
-    Delimiter, Group, Ident, Punct, Spacing, TokenStream, TokenTree
+    Delimiter,
+    Ident,
+    TokenStream,
+    TokenTree,
 };
 
-use crate::error::error;
+use crate::{
+    error::error,
+    util::{punct, group},
+};
+
 
 pub fn using(args: TokenStream, item: TokenStream) -> Result<TokenStream, TokenStream> {
     let mut item = item.into_iter().collect::<Vec<_>>();
@@ -76,14 +83,6 @@ pub fn using(args: TokenStream, item: TokenStream) -> Result<TokenStream, TokenS
     ]);
     
     Ok(stream)
-}
-
-fn punct(punct: char) -> TokenTree {
-    TokenTree::Punct(Punct::new(punct, Spacing::Alone))
-}
-    
-fn group(delimiter: Delimiter, stream: TokenStream) -> TokenTree {
-    TokenTree::Group(Group::new(delimiter, stream))
 }
 
 fn fold_into(delimiter: Delimiter) -> TokenStream {

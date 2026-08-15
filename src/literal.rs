@@ -22,16 +22,16 @@ impl StringType {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum LitKind {
     Char,
     String,
-    RawString(#[expect(unused)] u8),
+    RawString(u8),
     ByteChar,
     ByteString,
-    RawByteString(#[expect(unused)]u8),
+    RawByteString(u8),
     CString,
-    RawCString(#[expect(unused)] u8),
+    RawCString(u8),
     Number,
     Unknown,
 }

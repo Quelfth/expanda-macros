@@ -105,6 +105,8 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
         MatchScrutinee,
         MatchInterpolation,
         MatchBody { scrutinee: Metaval },
+        DebugDollar,
+        DebugName,
         Interpolation,
     }
 
@@ -170,6 +172,7 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                             "for" => State::ForDollar,
                             "repeat" => State::Repeat,
                             "match" => State::MatchScrutinee,
+                            "debug" => State::DebugDollar,
                             _ => return Err(error(&ident, "invalid directive")),
                         };
                     },
@@ -326,6 +329,16 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                 let Tt::Group(group) = tt else { return Err(error(&tt, "match directive requires `( )`, `[ ]`, or `{ }` here")) };
                 code.extend(expand_match(&cx, scrutinee, group)?);
                 state = State::Code;
+            }
+            // <--debug
+            State::DebugDollar => {
+                check_punct(tt, cx.sigil, &format!("debug requires `{}`", cx.sigil))?;
+                state = State::DebugName;
+            }
+            // <--debug $
+            State::DebugName => {
+                let val = eval_interpolation(&cx, &tt)?;
+                return Err(error(&tt, &format!("evaluates to: {val}")))
             }
             // $
             State::Interpolation => {

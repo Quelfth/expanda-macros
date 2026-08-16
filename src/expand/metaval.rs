@@ -4,10 +4,12 @@ use proc_macro::{Ident, Span, TokenStream, TokenTree as Tt};
 
 use crate::{error::error, literal::{LitKind, StringType, make_ident, parse_string, unescape}};
 
-#[derive(Clone, Default)]
+mod display;
+
+#[derive(Clone, Default, Debug)]
 pub struct Metaval(Vec<MetavalToken>);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MetavalToken {
     order: u32,
     token: Tt,
@@ -16,6 +18,10 @@ pub struct MetavalToken {
 impl MetavalToken {
     pub fn order_fn(order: u32) -> impl Fn(Tt) -> Self {
         move |token| Self { order, token }
+    }
+
+    pub fn new(order: u32, token: Tt) -> Self {
+        Self { order, token }
     }
 
     pub fn zero(token: Tt) -> Self {

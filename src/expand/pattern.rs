@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, iter};
 
 use proc_macro::{Delimiter, Punct, Spacing, TokenStream, TokenTree as Tt};
 
@@ -153,18 +153,24 @@ impl MatchContext {
     }
 
     pub fn push_val(&mut self, name: String, val: &[Tt]) {
-        self
-            .vars
+        if val.is_empty() {
+            return;
+        }
+        let entry = self.vars
             .entry(name)
-            .or_default()
-            .extend(
-                val
-                    .iter()
-                    .cloned()
-                    .map(
-                        MetavalToken::order_fn(self.depth)
-                    )
-            )
+            .or_default();
+        entry.extend(
+            val[..val.len() - 1]
+                .iter()
+                .cloned()
+                .map(
+                    MetavalToken::order_fn(self.depth + 1)
+                )
+                .chain(iter::once(MetavalToken::new(
+                    self.depth,
+                    val[val.len() - 1].clone(),
+                )))
+        )
     }
 
     pub fn merge(&mut self, other: Self) {

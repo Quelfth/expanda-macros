@@ -1,14 +1,7 @@
-use std::{collections::HashMap, mem};
+use std::{collections::HashMap, env, mem};
 
 use proc_macro::{
-    Delimiter,
-    Group,
-    Ident,
-    Punct,
-    Spacing,
-    Span,
-    TokenStream,
-    TokenTree as Tt
+    Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree as Tt
 };
 
 use crate::{
@@ -93,6 +86,7 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
         LetName,
         LetEqual { name: NameOrPattern },
         LetValue { name: NameOrPattern, interpolation: bool },
+        LetEnv,
         ForDollar,
         ForName,
         ForIn { name: String },
@@ -213,6 +207,9 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                             span: g.span(),
                         }};
                     }
+                    Tt::Ident(ref i) if i.to_string() == "env" => {
+                        state = State::LetEnv
+                    }
                     _ => return Err(error(&tt, &format!("let directive requires `{}name` or `( )`, `[ ]` or `{{  }}` here", cx.sigil)))
                 }
             },
@@ -240,6 +237,12 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                     }
                     state = State::Code;
                 }
+            }
+            State::LetEnv => {
+                let Tt::Ident(ref name) = tt else {return Err(error(&tt, "let env directive requires an identifier here"))};
+                let Ok(var) = env::var(name.to_string()) else {return Err(error(&tt, &format!("unable to read env var {name}")))};
+                cx.let_var(name.to_string(), Tt::Literal(Literal::string(&var)));
+                state = State::Code;
             }
             // <--for
             State::ForDollar => {

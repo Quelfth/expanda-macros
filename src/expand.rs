@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, mem};
 
 use proc_macro::{
     Delimiter,
@@ -129,7 +129,7 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                 match tt {
                     Tt::Punct(ref punct) => {
                         match punct.as_char() {
-                            '<' => {
+                            '<' if punct.spacing() == Spacing::Joint => {
                                 state = State::Arrowhead;
                                 tentative.push(tt);
                             }
@@ -148,17 +148,27 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
                 match tt {
                     Tt::Punct(ref punct) if punct.as_char() == '-' => {
                         state = match state {
-                            State::Arrowhead => State::Arrow,
+                            State::Arrowhead => {
+                                tentative.push(tt);
+                                State::Arrow
+                            },
                             State::Arrow => {
                                 tentative.clear();
                                 State::StartDirective
                             },
                             _ => unreachable!()
                         };
-                        tentative.push(tt);
                     },
+                    Tt::Punct(ref punct) if punct.as_char() == '<' && punct.spacing() == Spacing::Joint => {
+                        code.extend(mem::take(&mut tentative));
+                        state = State::Arrowhead
+                    }
+                    Tt::Punct(ref punct) if punct.as_char() == cx.sigil => {
+                        code.extend(mem::take(&mut tentative));
+                        state = State::Interpolation
+                    }
                     _ => {
-                        code.extend(tentative.drain(..).rev());
+                        code.extend(mem::take(&mut tentative));
                         code.push(expand_if_group(&cx, tt)?);
                         state = State::Code
                     },
@@ -353,7 +363,12 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
         }
     }
 
-    Ok(code.into_iter().chain(tentative).collect())
+    match state {
+        State::Code | State::Arrowhead | State::Arrow => Ok(code.into_iter().chain(tentative).collect()),
+        State::StartDirective => Err(error(&Span::call_site(), "directive arrow is missing directive")),
+        State::Interpolation => Err(error(&Span::call_site(), "interpolation sigil missing interpolation")),
+        _ => Err(error(&Span::call_site(), "incomplete directive")),
+    }
 }
 
 fn expand_metaval(cx: &ExpandContext<'_>, token: Tt) -> Result<Metaval, TokenStream> {

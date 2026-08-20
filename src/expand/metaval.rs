@@ -1,6 +1,6 @@
 use std::{collections::HashSet, slice};
 
-use proc_macro::{Ident, Span, TokenStream, TokenTree as Tt};
+use proc_macro::{Ident, Literal, Span, TokenStream, TokenTree as Tt};
 
 use crate::{error::error, literal::{LitKind, StringType, make_ident, parse_string, unescape}};
 
@@ -250,6 +250,24 @@ impl Metaval {
             }
 
             *ident = Ident::new(&text, ident.span());
+        }
+
+        Ok(self)
+    }
+
+    pub fn to_dashes(mut self) -> Result<Self, TokenStream> {
+        for token in &mut self.0 {
+            match &mut token.token {
+                Tt::Literal(literal) => {
+                    if LitKind::of(literal).string_type().is_some() {
+                        let string = literal.to_string();
+                        let (text, _) = parse_string(&string);
+                        let text = text.replace("_", "-");
+                        *literal = Literal::string(&text);
+                    }
+                },
+                _ => continue,
+            }
         }
 
         Ok(self)

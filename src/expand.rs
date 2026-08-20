@@ -353,7 +353,7 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
         }
     }
 
-    Ok(code.into_iter().collect())
+    Ok(code.into_iter().chain(tentative).collect())
 }
 
 fn expand_metaval(cx: &ExpandContext<'_>, token: Tt) -> Result<Metaval, TokenStream> {

@@ -6,7 +6,6 @@ use crate::expand::ExpandContext;
 
 mod expand;
 mod literal;
-mod import;
 mod declare;
 mod error;
 mod util;
@@ -22,11 +21,6 @@ pub fn expand_attr(input: TokenStream, item: TokenStream) -> TokenStream {
         Ok(attrs) => TokenStream::from_iter([attrs, item]),
         Err(error) => error,
     }
-}
-
-#[proc_macro_attribute]
-pub fn using(args: TokenStream, item: TokenStream) -> TokenStream {
-    import::using(args, item).unwrap_or_else(identity)
 }
 
 #[proc_macro_attribute]

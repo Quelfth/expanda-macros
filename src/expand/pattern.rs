@@ -182,7 +182,7 @@ impl MatchContext {
     }
 
     pub fn into_vars(self) -> impl Iterator<Item = (String, Metaval)> {
-        self.vars.into_iter()
+        self.vars.into_iter().map(|(s, val)| (s, val.simplify()))
     }
 }
 

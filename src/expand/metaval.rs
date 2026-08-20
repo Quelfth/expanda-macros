@@ -1,4 +1,4 @@
-use std::slice;
+use std::{collections::HashSet, slice};
 
 use proc_macro::{Ident, Span, TokenStream, TokenTree as Tt};
 
@@ -77,6 +77,38 @@ impl Metaval {
             .map(
                 |MetavalToken { token, .. }| token.clone()
             ).collect()
+    }
+
+    pub fn simplify(mut self) -> Self {
+        if self.0.is_empty() {
+            return self;
+        }
+        let mut max_order = 0;
+        let mut orders = HashSet::new();
+        for token in &self.0[..self.0.len() - 1] {
+            if token.order > max_order {
+                max_order = token.order;
+            }
+            orders.insert(token.order);
+        }
+
+        let mut missing_orders = HashSet::new();
+        for o in 0..=max_order {
+            if !orders.contains(&o) {
+                missing_orders.insert(o);
+            }
+        }
+
+        for token in &mut self.0 {
+            let order = token.order;
+            for &m in &missing_orders {
+                if m < order {
+                    token.order = token.order.saturating_sub(1);
+                }
+            }
+        }
+
+        self
     }
     
     pub fn first_span(&self) -> Option<Span> {

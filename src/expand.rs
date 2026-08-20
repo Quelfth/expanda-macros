@@ -146,19 +146,21 @@ pub fn expand(mut cx: ExpandContext<'_>, stream: TokenStream) -> Result<TokenStr
             // <-
             State::Arrowhead | State::Arrow => {
                 match tt {
-                    Tt::Punct(ref punct) => {
-                        if punct.as_char() == '-' {
-                            state = match state {
-                                State::Arrowhead => State::Arrow,
-                                State::Arrow => State::StartDirective,
-                                _ => unreachable!()
-                            };
-                            tentative.push(tt);
-                        }
+                    Tt::Punct(ref punct) if punct.as_char() == '-' => {
+                        state = match state {
+                            State::Arrowhead => State::Arrow,
+                            State::Arrow => {
+                                tentative.clear();
+                                State::StartDirective
+                            },
+                            _ => unreachable!()
+                        };
+                        tentative.push(tt);
                     },
                     _ => {
                         code.extend(tentative.drain(..).rev());
                         code.push(expand_if_group(&cx, tt)?);
+                        state = State::Code
                     },
                 }
             },

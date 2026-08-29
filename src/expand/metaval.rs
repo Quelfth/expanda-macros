@@ -56,6 +56,12 @@ impl Metaval {
         self.0.len()
     }
 
+    pub fn count(&self) -> usize {
+        if self.0.is_empty() { 0 } else {
+            self.0[0..self.0.len() - 1].iter().filter(|x| x.order == 0).count() + 1
+        }
+    }
+
     pub fn is_single(&self) -> bool {
         self.len_flat() == 1
     }
@@ -271,6 +277,10 @@ impl Metaval {
         }
 
         Ok(self)
+    }
+
+    pub fn len_token(&self) -> Self {
+        Self::single(Tt::Literal(Literal::usize_unsuffixed(self.count())))
     }
 }
 

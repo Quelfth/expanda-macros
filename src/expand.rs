@@ -528,6 +528,7 @@ fn eval_expression(cx: &ExpandContext<'_>, group: &Group) -> Result<Metaval, Tok
                     "camel_case" => *value = value.clone().recase(Case::Camel)?,
                     "upper_snake_case" => *value = value.clone().recase(Case::UpperSnake)?,
                     "to_dashes" => *value = value.clone().to_dashes()?,
+                    "len" => *value = value.clone().len_token(),
                     _ => return Err(error(&tt, "unknown interpolation operator"))
                 }
                 state = State::Value;

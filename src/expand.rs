@@ -7,7 +7,7 @@ use proc_macro::{
 use crate::{
     error::{ErrorSpan, error},
     expand::{metaval::{Case, ConcatenateError}, pattern::{MatchContext, PatternIter}},
-    literal::{LitKind, StringType, parse_int, parse_string},
+    literal::{StringType, parse_int},
 };
 
 use metaval::Metaval;
@@ -60,16 +60,6 @@ impl<'a> ExpandContext<'a> {
             parent.value(name)
         } else {
             Err(error(name, "unknown metavariable"))
-        }
-    }
-
-    pub fn value_spanned(&self, name: &str, span: Span) -> Result<&Metaval, TokenStream> {
-        if let Some(val) = self.metavars.get(name) {
-            Ok(val)
-        } else if let Some(parent) = self.parent {
-            parent.value_spanned(name, span)
-        } else {
-            Err(error(&span, "unknown metavariable"))
         }
     }
 }
@@ -493,18 +483,8 @@ fn eval_expression(cx: &ExpandContext<'_>, group: &Group) -> Result<Metaval, Tok
                 Tt::Group(ref g) if g.delimiter() == Delimiter::Brace => {
                     tokens.push(eval_expression(cx, g)?);
                 }
-                Tt::Literal(ref l) => {
-                    let kind = LitKind::of(l);
-                    if let Some(string_type) = kind.string_type() {
-                        let s = l.to_string();
-                        let (content, "") = parse_string(&s) else { return Err(error(&tt, "literal suffix is not allowed here")) };
-                        let val = cx.value_spanned(content, tt.span())?;
-                        let val = val.stringify(string_type);
-
-                        tokens.push(val);
-                    } else {
-                        return Err(error(&tt, "unsupported expression literal token"));
-                    }
+                Tt::Literal(_) => {
+                    tokens.push(expand_metaval(cx, tt.clone())?);
                 }
                 Tt::Punct(ref p) if p.as_char() == '.' => {
                     state = State::Operator(p.span());

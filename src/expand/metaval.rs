@@ -91,7 +91,7 @@ impl Metaval {
         }
         let mut max_order = 0;
         let mut orders = HashSet::new();
-        for token in &self.0[..self.0.len() - 1] {
+        for token in &self.0[..self.0.len()] {
             if token.order > max_order {
                 max_order = token.order;
             }
